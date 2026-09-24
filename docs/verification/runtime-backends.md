@@ -674,6 +674,42 @@ It captures the launch `bin/fm-spawn.sh` actually builds, replays those exact fl
 It spends no model tokens, so it runs by default wherever Codex is installed.
 The portable half, `tests/fm-spawn-dispatch-profile.test.sh`, pins the split the launch template makes: a crewmate launches hook-free while a secondmate, which runs a primary session on this repository's own project hooks, keeps them.
 
+## Codex service tier
+
+Verified on 2026-09-24 with codex-cli 0.156.1 on macOS arm64.
+
+The installed model catalog advertises Fast as every model's default tier, and the operator's `config.toml` set no `service_tier`:
+
+```sh
+python3 -c 'import json; [print(m["slug"], m["default_service_tier"]) for m in json.load(open("'"$HOME"'/.codex/models_cache.json"))["models"]]'
+```
+
+```text
+gpt-6-sol priority
+gpt-5.6-sol priority
+...
+```
+
+The same crewmate launch driven in a real terminal, first without and then with the override, showed the footer difference and recorded the tier in the session log:
+
+```sh
+codex --model gpt-5.6-sol -c 'model_reasoning_effort="high"' --dangerously-bypass-approvals-and-sandbox --disable hooks 'Reply with exactly the word ok and do nothing else.'
+codex --model gpt-5.6-sol -c 'model_reasoning_effort="high"' --dangerously-bypass-approvals-and-sandbox -c "service_tier=\"default\"" --disable hooks 'Reply with exactly the word ok and do nothing else.'
+```
+
+```text
+GPT-5.6-Sol high fast · <cwd>
+GPT-5.6-Sol high · <cwd>
+"service_tier":"default"
+```
+
+In that session `/fast status` was submitted to the model as a chat turn rather than handled by Codex, because `/fast` accepts no argument.
+
+`tests/fm-codex-service-tier-live-e2e.test.sh` is the command that refreshes this record.
+It captures the launch `bin/fm-spawn.sh` actually builds and replays its flags against the installed Codex's app-server under a throwaway `CODEX_HOME` whose `config.toml` prefers Fast, reading back `priority` without the override and `default` with it.
+It spends no model tokens, so it runs by default wherever Codex is installed.
+The portable half is `tests/fm-spawn-dispatch-profile.test.sh` for crewmate and secondmate launches and `tests/fm-control-relaunch.test.sh` for relaunch.
+
 ## Composer classification matrix
 
 The shared composer classifier (`bin/fm-composer-lib.sh`, `fm_composer_classify_screen`) owns every composer shape fleet-wide; each backend contributes only a capture and a capability descriptor.

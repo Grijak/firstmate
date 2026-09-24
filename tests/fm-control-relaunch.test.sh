@@ -736,6 +736,23 @@ test_same_harness_relaunch_keeps_the_profile_axes() {
   pass "fm-control relaunch: a same-harness relaunch keeps the profile axes it was running with"
 }
 
+test_codex_relaunch_keeps_standard_service_tier_and_profile() {
+  local dir out rc launch
+  dir=$(new_case codexstandard rl6c)
+  add_ship_task "$dir" rl6c codex
+  printf 'codex' > "$dir/fake/command"
+  printf 'codex' > "$dir/fake/becomes"
+  sed 's/^model=default$/model=gpt-5.6-sol/; s/^effort=default$/effort=high/' \
+    "$dir/home/state/rl6c.meta" > "$dir/home/state/rl6c.meta.tmp"
+  mv "$dir/home/state/rl6c.meta.tmp" "$dir/home/state/rl6c.meta"
+  out=$(run_control "$dir" rl6c relaunch --note "same runtime"); rc=$?
+  expect_code 0 "$rc" "a same-harness codex relaunch should succeed"$'\n'"$out"
+  launch=$(grep 'encode launch-brief' "$dir/fake/literal")
+  assert_contains "$launch" "codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox -c \"service_tier=\\\"default\\\"\"" \
+    "a codex relaunch must keep its model and effort and pin the Standard service tier"
+  pass "fm-control relaunch: a codex replacement keeps its profile and launches at Standard speed"
+}
+
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   local dir out rc id=rl-ultra
   dir=$(new_case native-ultra "$id")
@@ -2347,6 +2364,7 @@ test_harness_switch_does_not_carry_the_old_profile_axes
 test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
+test_codex_relaunch_keeps_standard_service_tier_and_profile
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch

@@ -499,6 +499,43 @@ test_codex_secondmate_launch_keeps_the_hook_layer() {
   pass "a codex secondmate keeps the project hook layer its primary session runs on"
 }
 
+# Codex's model catalog defaults its models to the Fast service tier, which
+# bills plan usage at a higher rate, so every codex launch pins Standard speed
+# explicitly and leaves the profile's model and effort exactly as resolved.
+test_codex_crewmate_launch_pins_standard_service_tier() {
+  local rec id out status launch
+  id=profile-codex-standard-z4e
+  rec=$(make_spawn_case profile-codex-standard codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.6-sol --effort high)
+  status=$?
+  expect_code 0 "$status" "codex crewmate spawn should succeed"$'\n'"$out"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.6-sol high
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox -c \"service_tier=\\\"default\\\"\"" \
+    "codex crewmate launch did not pin the Standard service tier beside its unchanged model and effort"
+  assert_not_contains "$launch" "priority" "codex crewmate launch must never request the Fast tier"
+  pass "a codex crewmate launches at Standard speed with its resolved model and effort"
+}
+
+test_codex_secondmate_launch_pins_standard_service_tier() {
+  local rec id sm out status launch
+  id=profile-codex-secondmate-standard-z4f
+  rec=$(make_spawn_case profile-codex-secondmate-standard codex "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "codex secondmate spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--dangerously-bypass-approvals-and-sandbox -c \"service_tier=\\\"default\\\"\"" \
+    "codex secondmate launch did not pin the Standard service tier"
+  pass "a codex secondmate launches at Standard speed"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -1499,6 +1536,8 @@ test_codex_threads_model_and_max_effort
 test_codex_omits_max_effort_for_unsupported_model
 test_codex_crewmate_launch_disables_the_hook_layer
 test_codex_secondmate_launch_keeps_the_hook_layer
+test_codex_crewmate_launch_pins_standard_service_tier
+test_codex_secondmate_launch_pins_standard_service_tier
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
