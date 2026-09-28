@@ -2289,6 +2289,63 @@ SH
   pass "a board answer reaches the keyed-answer intake and wakes firstmate"
 }
 
+# A board answer carrying non-ASCII text must be recorded whole: the adapter
+# once emitted such a character as one Latin-1 byte, which cut the recorded
+# answer off at the first umlaut and double-encoded the label. Covers a bare
+# note, which is the whole answer, and an ASCII selection beside a non-ASCII
+# note, where the label carries the text; both use umlauts and a sharp s, and
+# the second adds an emoji.
+test_non_ascii_board_answer_is_recorded_intact() {
+  local home sid stub out show
+  home=$(make_home board-channel-non-ascii)
+  sid=lavish-b0a4d0000000f1e3
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
+
+  run_captain "$home" hold sample-umlaut-note-call --title "Confirm the final selection" \
+    --reason "captain final confirmation pending" --repo sample >/dev/null \
+    || fail "could not register the bare-note call"
+  run_captain "$home" hold sample-umlaut-selected-call --title "Choose the sample route" \
+    --reason "captain route choice pending" --repo sample >/dev/null \
+    || fail "could not register the selected-option call"
+
+  stub="$home/board-source.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'OUT'
+session:
+  status: feedback
+  session_ended: false
+prompts[2]{tag,text,prompt}:
+  "choice","Runde 4: ENDAUSWAHL BESTÄTIGT, Größe","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"sample-umlaut-note-call\",\"selection\":\"\",\"note\":\"Runde 4: ENDAUSWAHL BESTÄTIGT, Größe\"}"
+  "choice","Nordroute - Bitte prüfen: Übergänge für Maß 🎉","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"sample-umlaut-selected-call\",\"selection\":\"north\",\"note\":\"Bitte prüfen: Übergänge für Maß 🎉\"}"
+OUT
+SH
+  chmod +x "$stub"
+
+  run_procevent "$home" register lavish "$sid" -- "$stub" >/dev/null \
+    || fail "could not register the board source"
+  run_captain "$home" bind "$sid" >/dev/null \
+    || fail "could not bind the board source to the keyed-answer intake"
+
+  out=$(run_procevent "$home" start "$sid" 2>&1) \
+    || fail "the board source runner did not complete: $out"
+  assert_contains "$out" "answers-fed: $sid" \
+    "the captured non-ASCII board answer never reached the keyed-answer intake: $out"
+
+  show=$(tasks_in "$home" show sample-umlaut-note-call --full)
+  assert_contains "$show" "state: done" "the non-ASCII bare note did not close its call"
+  assert_contains "$show" "Answer: Runde 4: ENDAUSWAHL BESTÄTIGT, Größe" \
+    "the recorded answer was cut off or mangled at its first non-ASCII character"
+  assert_contains "$show" "Answer as shown to the captain: Runde 4: ENDAUSWAHL BESTÄTIGT, Größe" \
+    "the recorded label was cut off or mangled at a non-ASCII character"
+  show=$(tasks_in "$home" show sample-umlaut-selected-call --full)
+  assert_contains "$show" "state: done" "the non-ASCII annotated selection did not close its call"
+  assert_contains "$show" "Answer: north" "the selected option was lost beside a non-ASCII note"
+  assert_contains "$show" "Answer as shown to the captain: Nordroute - Bitte prüfen: Übergänge für Maß 🎉" \
+    "the recorded label was cut off or mangled at a non-ASCII character"
+  pass "a non-ASCII board answer is recorded intact"
+}
+
 # The intake is channel-agnostic, so chat must reach it the same way a captured
 # review does - for a task-id key, and for a legacy composed identity.
 test_chat_channel_feeds_the_same_keyed_answer_intake() {
@@ -4058,6 +4115,7 @@ test_reconcile_outcomes_retry_partial_failures_once
 test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
+test_non_ascii_board_answer_is_recorded_intact
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
