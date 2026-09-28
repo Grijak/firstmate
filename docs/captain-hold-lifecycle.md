@@ -520,6 +520,7 @@ The suite does not test the accepted merge-to-cleanup re-hold window or asynchro
 - Answer-time resolution works through a bound channel with task-id keys.
   This includes the `release` mode, mode-matched replay idempotence, and the refusal of drifted, mode-mismatched, absent, unheld, and already-closed keys.
 - The chat channel reaches the same intake.
+- A board answer with non-ASCII text, whether a bare note or a label beside an ASCII selection, is recorded whole instead of being cut off at its first umlaut.
 - Hold-set stamping precedes visible hold state, preserves an active lifecycle's timestamp, and resets after release.
 - Interrupted answer closure retains the stamp until close and restores resolution-first ordering on retry.
 - Deferral through `--until` leaves `captain_actionable` false until due.
