@@ -127,10 +127,13 @@ fm_lint_worker_stop() {
   FM_LINT_WORKER_RUN_PID=
 }
 
+# EPOCHREALTIME is <seconds><radix><six microsecond digits> and the radix
+# follows the locale (a comma under de_DE), so keep only the digits and drop the
+# last three to get milliseconds.
 fm_lint_now_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    local seconds=${EPOCHREALTIME%.*} micros=${EPOCHREALTIME#*.}
-    printf '%s\n' "$((seconds * 1000 + 10#${micros:0:3}))"
+    local digits=${EPOCHREALTIME//[!0-9]/}
+    printf '%s\n' "${digits%???}"
   else
     printf '%s\n' "$(($(date +%s) * 1000))"
   fi
