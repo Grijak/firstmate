@@ -289,9 +289,9 @@ pass "a launch without a model resolves Pi's default, and no models.json means n
 mkdir -p "$TMP_ROOT/user/.pi/agent"
 printf '{"providers":{"local-ai":{"baseUrl":"%s","models":[{"id":"qwen-deep"}]}}}\n' "$BASE" > "$TMP_ROOT/user/.pi/agent/models.json"
 # shellcheck disable=SC2088  # The literal ~ is what Pi and the check expand.
-OUT=$(env -u FM_PI_AGENT_DIR_OVERRIDE HOME="$TMP_ROOT/user" PI_CODING_AGENT_DIR='~/.pi/agent' "$TOOL" check pi:local-ai/qwen-deep 2>&1)
+OUT=$(env -u FM_LOCAL_MODEL_PI_AGENT_DIR HOME="$TMP_ROOT/user" PI_CODING_AGENT_DIR='~/.pi/agent' "$TOOL" check pi:local-ai/qwen-deep 2>&1)
 assert_contains "$OUT" "pi:local-ai/qwen-deep ready:" "PI_CODING_AGENT_DIR with a leading ~ is expanded"
-OUT=$(env -u FM_PI_AGENT_DIR_OVERRIDE HOME="$TMP_ROOT/user" "$TOOL" check pi:local-ai/qwen-deep 2>&1)
+OUT=$(env -u FM_LOCAL_MODEL_PI_AGENT_DIR HOME="$TMP_ROOT/user" "$TOOL" check pi:local-ai/qwen-deep 2>&1)
 assert_contains "$OUT" "pi:local-ai/qwen-deep ready:" "the default agent directory is ~/.pi/agent"
 pass "the agent directory follows PI_CODING_AGENT_DIR and Pi's default"
 
@@ -463,7 +463,7 @@ spawn_pi() {  # <id> [fm-spawn args...] -> OUT RC
   local id=$1
   shift
   fm_test_spawn_brief "$HOME_DIR" "$id"
-  OUT=$(FM_PI_AGENT_DIR_OVERRIDE="$AGENT" FM_FAKE_LAUNCH_LOG="$CASE/launch.log" \
+  OUT=$(FM_LOCAL_MODEL_PI_AGENT_DIR="$AGENT" FM_FAKE_LAUNCH_LOG="$CASE/launch.log" \
     fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id" "$PROJ" --mode no-mistakes --yolo off --harness pi "$@")
   RC=$?
 }

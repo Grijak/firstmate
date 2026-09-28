@@ -57,7 +57,7 @@
 #                the model resolves to a provider without a local base URL.
 #
 # Effective configuration, read the way Pi reads it and never duplicated:
-#   The agent directory is --agent-dir, else FM_PI_AGENT_DIR_OVERRIDE (an
+#   The agent directory is --agent-dir, else FM_LOCAL_MODEL_PI_AGENT_DIR (an
 #   alternate directory, mainly for tests), else PI_CODING_AGENT_DIR (with a
 #   leading ~ expanded), else $HOME/.pi/agent. Its models.json declares
 #   custom providers; a UTF-8 BOM, // comments, and trailing commas are
@@ -156,7 +156,7 @@ strip_bom() {
 }
 
 resolve_agent_dir() {
-  local dir=${1:-${FM_PI_AGENT_DIR_OVERRIDE:-${PI_CODING_AGENT_DIR:-}}}
+  local dir=${1:-${FM_LOCAL_MODEL_PI_AGENT_DIR:-${PI_CODING_AGENT_DIR:-}}}
   if [ -z "$dir" ]; then
     dir="${HOME:-}/.pi/agent"
   fi

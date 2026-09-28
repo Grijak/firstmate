@@ -798,7 +798,7 @@ test_local_model_relaunch_refuses_before_stop() {
   printf '{"providers":{"local-ai":{"baseUrl":"http://127.0.0.1:%s/v1","models":[{"id":"qwen-agent"},{"id":"qwen-fast"}]}}}\n' "$port" \
     > "$dir/user-home/.pi/agent/models.json"
   cp "$dir/home/state/$id.meta" "$dir/meta-before"
-  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "local server offline"); rc=$?
+  out=$(FM_LOCAL_MODEL_PI_AGENT_DIR="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "local server offline"); rc=$?
   expect_code 1 "$rc" "a relaunch onto an offline local model must refuse"
   assert_contains "$out" "the replacement for $id cannot take its local model now, so the running agent was left untouched: pi:local-ai/qwen-agent unavailable: the local model server http://127.0.0.1:$port/v1 is unreachable" \
     "the refusal should name the offline local server"
@@ -821,7 +821,7 @@ test_local_model_relaunch_refuses_before_stop() {
   printf 'model=local-ai/qwen-fast\n' >> "$dir/home/state/$id.meta"
   printf 'harness=pi\nmodel=local-ai/qwen-fast\nkind=ship\n' > "$dir/home/state/rl-other.meta"
   cp "$dir/home/state/$id.meta" "$dir/meta-before"
-  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch while another task holds qwen-fast"); rc=$?
+  out=$(FM_LOCAL_MODEL_PI_AGENT_DIR="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch while another task holds qwen-fast"); rc=$?
   expect_code 1 "$rc" "a relaunch that would switch away from a model another task uses must refuse"
   assert_contains "$out" "pi:local-ai/qwen-agent busy: task(s) rl-other (qwen-fast) use another model of http://127.0.0.1:$port/v1" \
     "the refusal should name the other task on the loaded model"
@@ -829,7 +829,7 @@ test_local_model_relaunch_refuses_before_stop() {
   cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" || fail "a refused relaunch must leave the task record untouched"
 
   rm -f "$dir/home/state/rl-other.meta"
-  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch the sole local session"); rc=$?
+  out=$(FM_LOCAL_MODEL_PI_AGENT_DIR="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch the sole local session"); rc=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 0 "$rc" "a relaunch of the sole session on the loaded model should switch it: $out"

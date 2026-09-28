@@ -24,7 +24,7 @@ RULES="$HOME_DIR/config/crew-dispatch.json"
 QUOTA="$TMP_ROOT/quota.json"
 BASE_PATH=$PATH
 # The local model recheck reads this suite's own Pi configuration.
-export FM_PI_AGENT_DIR_OVERRIDE="$TMP_ROOT/pi-agent"
+export FM_LOCAL_MODEL_PI_AGENT_DIR="$TMP_ROOT/pi-agent"
 mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
 for command_name in bash chmod cp dirname jq mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
@@ -1021,9 +1021,9 @@ assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
 
 # --- local model candidates are rechecked on every resolution -----------------
-mkdir -p "$FM_PI_AGENT_DIR_OVERRIDE"
+mkdir -p "$FM_LOCAL_MODEL_PI_AGENT_DIR"
 printf '{"providers":{"local-ai":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"qwen-agent"}]}}}\n' \
-  > "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+  > "$FM_LOCAL_MODEL_PI_AGENT_DIR/models.json"
 jq '.rules[3].use += [{"harness": "pi", "model": "local-ai/qwen-agent", "provider": "local-ai"}]' "$BASE_RULES" > "$RULES"
 reset_log
 write_response "$RESPONSE" rule_4 0.9
@@ -1075,13 +1075,13 @@ assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-m
 rm -f "$HOME_DIR/state/held-local.meta"
 jq 'del(.localSessions)' "$RULES" > "$RULES.tmp" && mv "$RULES.tmp" "$RULES"
 reset_log
-printf '{"providers": {' > "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+printf '{"providers": {' > "$FM_LOCAL_MODEL_PI_AGENT_DIR/models.json"
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" "candidate: pi:local-ai/qwen-agent  provider=local-ai  local=unchecked  -> eligible, unranked" \
   "an unreadable Pi configuration is disclosed on the candidate without blocking it"
 assert_not_contains "$out" "  local: " "an unreadable Pi configuration is not reported as a server the captain could start"
 cp "$BASE_RULES" "$RULES"
-rm -f "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+rm -f "$FM_LOCAL_MODEL_PI_AGENT_DIR/models.json"
 pass "local model candidates are rechecked on every resolution and never selected while unavailable, busy, or full"
 
 printf '# all fm-dispatch-resolve tests passed\n'

@@ -29,7 +29,7 @@ TOOL="$ROOT/bin/fm-local-model.sh"
 TMP_ROOT=$(fm_test_tmproot fm-local-model-live)
 export HOME="$TMP_ROOT/home"
 mkdir -p "$HOME"
-unset PI_CODING_AGENT_DIR FM_PI_AGENT_DIR_OVERRIDE
+unset PI_CODING_AGENT_DIR FM_LOCAL_MODEL_PI_AGENT_DIR
 LOG="$TMP_ROOT/requests"
 SERVER_PID=
 CHECKED=

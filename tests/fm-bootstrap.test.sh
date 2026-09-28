@@ -959,21 +959,21 @@ test_network_phase_observes_local_models() {
   log="$case_dir/timings.tsv"
 
   only_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 FM_TIMING_LOG="$log" \
+    FM_LOCAL_MODEL_PI_AGENT_DIR="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 FM_TIMING_LOG="$log" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh")
   assert_contains "$only_out" "BOOTSTRAP_INFO: local models: http://127.0.0.1:$port/v1 is unreachable (no connection); local candidates qwen-agent cannot take work until it is started; cloud profiles still apply" \
     "the network half did not report the offline local model server"
   assert_timing_record "$log" phase local-models '' "the local model observation was not timed"
 
   skip_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
+    FM_LOCAL_MODEL_PI_AGENT_DIR="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh")
   assert_not_contains "$skip_out" "local models:" "the local half probed a local model server"
 
   printf '%s\n' '{"rules":[{"when":"A simple fix.","use":{"harness":"claude","model":"sonnet"}}]}' \
     > "$case_dir/home/config/crew-dispatch.json"
   only_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
+    FM_LOCAL_MODEL_PI_AGENT_DIR="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh")
   assert_not_contains "$only_out" "local models:" "a home without a local Pi profile reported local models"
   pass "bootstrap: the deferred network half observes configured local model servers, informational and timed"

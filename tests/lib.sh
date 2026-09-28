@@ -75,7 +75,7 @@ unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 # whenever that server is off. Only this check reads the override, so live
 # suites that launch a real pi keep its real configuration. A case that
 # exercises local model behavior sets its own directory.
-export FM_PI_AGENT_DIR_OVERRIDE=/nonexistent/fm-test-pi-agent-dir
+export FM_LOCAL_MODEL_PI_AGENT_DIR=/nonexistent/fm-test-pi-agent-dir
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
