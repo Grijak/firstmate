@@ -70,6 +70,7 @@ It is not deterministic across the verified adapters: codex, grok, gemini, and d
    A recorded raw-command basename that differs from its resolved adapter cannot reproduce the command actually running, so relaunch refuses before the checkpoint unless the caller passes an explicit `--harness` to choose the replacement runtime deliberately.
    A harness change resets model and effort unless they are named too, because a model chosen for one adapter does not transfer to another.
    A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), so a pin that no longer resolves or is signed out refuses before the old agent stops.
+   A Pi replacement whose model is served by a local model server must also pass the [local model availability](configuration.md#local-model-availability-pi-modelsjson) check before the old agent stops.
 2. **Safe checkpoint.**
    The recorded worktree must exist and be a worktree root; its head and dirty state are recorded.
    For a `kind=secondmate` task, the home's identity marker must match and its child records must be readable, so a relaunch can never strand child work behind an unreadable home.

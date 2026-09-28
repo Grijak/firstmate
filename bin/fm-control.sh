@@ -75,7 +75,9 @@
 #              A replacement Claude or Pi profile must also pass this home's
 #              worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
 #              that no longer resolves or is signed out refuses before the old
-#              agent stops.
+#              agent stops. A replacement Pi profile likewise runs
+#              bin/fm-local-model.sh check first, so a local model that cannot
+#              take it now refuses before the old agent stops.
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
@@ -854,10 +856,29 @@ resolve_relaunch_profile() {
   # The launch owner applies this home's worker account pin too, but only after
   # the old agent has been stopped, so a pin that no longer resolves or is
   # signed out must refuse here, while nothing has changed yet.
-  local account_model=$TARGET_MODEL
+  local account_model=$TARGET_MODEL account account_root local_spec local_out
   [ "$account_model" != default ] || account_model=
-  fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  account=$(fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+    "$account_model" "$TARGET_HARNESS") || return 1
+  # The launch owner also rechecks local model availability after the old agent
+  # stops; asking here first keeps a replacement that could not take the local
+  # model from stopping a running agent for nothing.
+  case "$TARGET_HARNESS" in
+    pi|pi-signed)
+      account_root=
+      if [ -n "$account" ]; then
+        account_root=${account#*$'\t'}
+        account_root=${account_root%%$'\t'*}
+      fi
+      local_spec=$TARGET_HARNESS
+      [ -z "$account_model" ] || local_spec="$TARGET_HARNESS:$account_model"
+      if [ -n "$account_root" ]; then
+        local_out=$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-local-model.sh" check --task "$ID" --agent-dir "$account_root" "$local_spec" 2>&1)
+      else
+        local_out=$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-local-model.sh" check --task "$ID" "$local_spec" 2>&1)
+      fi || die "the replacement for $ID cannot take its local model now, so the running agent was left untouched: ${local_out#local-model: }; choose another model or recheck later"
+      ;;
+  esac
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch

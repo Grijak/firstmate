@@ -939,6 +939,46 @@ SH
   pass "bootstrap: FM_BOOTSTRAP_NETWORK partitions one run into local and network halves"
 }
 
+# The local model observation is a network step: it belongs to the deferred
+# half only, reports an offline server as an informational fact, is timed like
+# every other network owner, and stays silent without a local Pi profile.
+test_network_phase_observes_local_models() {
+  local case_dir fakebin port only_out skip_out log
+  case_dir="$TMP_ROOT/network-local-models"
+  mkdir -p "$case_dir/home/config" "$case_dir/pi-agent"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  port=$(perl -MIO::Socket::INET -e '
+    my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 1, Proto => "tcp") or die;
+    print $s->sockport, "\n"; close $s;')
+  printf '{"providers":{"local-ai":{"baseUrl":"http://127.0.0.1:%s/v1","models":[{"id":"qwen-agent"}]}}}\n' "$port" \
+    > "$case_dir/pi-agent/models.json"
+  printf '%s\n' '{"rules":[{"when":"A simple fix.","use":[{"harness":"claude","model":"sonnet"},{"harness":"pi","model":"local-ai/qwen-agent"}]}]}' \
+    > "$case_dir/home/config/crew-dispatch.json"
+  log="$case_dir/timings.tsv"
+
+  only_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 FM_TIMING_LOG="$log" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$only_out" "BOOTSTRAP_INFO: local models: http://127.0.0.1:$port/v1 is unreachable (no connection); local candidates qwen-agent cannot take work until it is started; cloud profiles still apply" \
+    "the network half did not report the offline local model server"
+  assert_timing_record "$log" phase local-models '' "the local model observation was not timed"
+
+  skip_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$skip_out" "local models:" "the local half probed a local model server"
+
+  printf '%s\n' '{"rules":[{"when":"A simple fix.","use":{"harness":"claude","model":"sonnet"}}]}' \
+    > "$case_dir/home/config/crew-dispatch.json"
+  only_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_PI_AGENT_DIR_OVERRIDE="$case_dir/pi-agent" FM_LOCAL_MODEL_TIMEOUT=1 \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$only_out" "local models:" "a home without a local Pi profile reported local models"
+  pass "bootstrap: the deferred network half observes configured local model servers, informational and timed"
+}
+
 test_network_sweeps_recheck_lock_ownership() {
   local case_dir fakebin fake_root marker out
   case_dir="$TMP_ROOT/network-lock-handoff"
@@ -1157,6 +1197,11 @@ array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":
 array use without select is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}]}]}^empty^
 one-element array use is accepted^{"rules":[{"when":"focused feature","use":[{"harness":"claude"}]}]}^empty^
 default array is accepted^{"default":[{"harness":"pi","model":"anthropic/claude-sonnet-5"},{"harness":"grok"}]}^empty^
+local session limits are accepted^{"default":{"harness":"claude"},"localSessions":{"local-ai/qwen-agent":3,"local-ai/qwen-fast":1}}^empty^
+zero local session limit is flagged^{"default":{"harness":"claude"},"localSessions":{"local-ai/qwen-fast":0}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - localSessions must map provider/id model identities to positive integer session limits
+fractional local session limit is flagged^{"default":{"harness":"claude"},"localSessions":{"local-ai/qwen-agent":1.5}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - localSessions must map provider/id model identities to positive integer session limits
+local session key without provider is flagged^{"default":{"harness":"claude"},"localSessions":{"qwen-agent":3}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - localSessions must map provider/id model identities to positive integer session limits
+local session limits that are not an object are flagged^{"default":{"harness":"claude"},"localSessions":[3]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - localSessions must map provider/id model identities to positive integer session limits
 provider-less multi-provider profile remains accepted without opt-in^{"rules":[{"when":"cross-provider work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}^empty^
 one-element default array is accepted^{"default":[{"harness":"codex"}]}^empty^
 empty array use is flagged^{"rules":[{"when":"big feature","use":[]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each rule needs at least one use profile
@@ -1262,6 +1307,7 @@ test_fleet_sync_timeout_is_computed_before_launch
 test_routine_bootstrap_confirmations_are_silent
 test_routine_bootstrap_contract_runs_under_system_bash
 test_network_phase_partitions_the_run
+test_network_phase_observes_local_models
 test_network_sweeps_recheck_lock_ownership
 test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once

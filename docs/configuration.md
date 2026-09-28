@@ -533,7 +533,8 @@ This section is the single owner of the canonical schema and its per-field seman
   ],
   "default": [
     { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
-  ]
+  ],
+  "localSessions": { "<Pi provider>/<model id>": 3 }
 }
 ```
 
@@ -557,6 +558,8 @@ Its single-provider table is separate from the frozen legacy mapping used by `fm
 The resolver returns an actionable configuration error before any request when such a profile omits it.
 A profile `floor` contains only `scope` and `min_percent`, always uses that profile's provider and matched account, and makes that one candidate ineligible below `min_percent` on the named scope.
 An absent or unknown named row also makes the candidate unrankable and is reported as an unverifiable floor, not as a known shortfall.
+The optional top-level `localSessions` object maps a Pi model identity `<provider>/<id>`, as Pi's `models.json` declares it, to the positive integer maximum of concurrent sessions its local server accepts, for example `{"local-ai/qwen-agent": 3, "local-ai/qwen-fast": 1, "local-ai/qwen-deep": 1}`.
+It applies to every Pi launch and dispatch decision whether or not typed resolution is active, [Local model availability](#local-model-availability-pi-modelsjson) owns how sessions are counted, and a model it does not name has no declared limit.
 `ultra` is native-only: the model-aware validation contract and launch mapping are owned by `bin/fm-harness.sh validate-native-effort` and `bin/fm-spawn.sh` respectively.
 Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 An omitted model or effort means the selected harness uses its own default for that axis.
@@ -567,11 +570,12 @@ Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPA
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`; its Pi default declares the `claude` provider required for typed resolution of that Anthropic model.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
+Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, an effort value unsupported by that harness, or a `localSessions` value that is not an object of `provider/id` keys with positive integer limits is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those inert declarations preserve the pre-existing bootstrap behavior.
 Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+Pi profiles served by a local model server are rechecked before every handoff and launch; [Local model availability](#local-model-availability-pi-modelsjson) owns that contract.
 
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
@@ -601,6 +605,7 @@ A picked rule without `min_confidence`, and the neutral option, keep the global 
 When the picked rule declares its own floor and its probability is below it, the tool takes the most probable other option whose probability clears that option's floor (a rule's `min_confidence`, otherwise 0.6), prints a `fallback:` line naming both floors, and resolves that rule as though it had been picked; no qualifying option, or two equally probable ones, is `ambiguous`.
 Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
 Missing or nonnumeric `spendPriority` evidence is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+Each Pi profile the answer can select is also rechecked under [Local model availability](#local-model-availability-pi-modelsjson), and a `local:` line names any local candidate that cannot take work now.
 On the opted-in path, duplicate concrete profiles with the same harness, model, and effort inside one rule or the default array are configuration errors rather than ties.
 The result is one of `clear` (a `profile:` line ready for `fm-spawn.sh`), `ambiguous` (confidence below the floor with no runner-up taken), `escalate` (an approval-gated rule, unverifiable rule floor, nothing rankable, or a genuine tie), or `error` (API, network, malformed response metadata, rendering, or quota-axi failure), and every one of them exits 0.
 Response probabilities must contain exactly every offered choice, use numeric values from 0 through 1, and sum to approximately 1 within 0.01.
@@ -614,6 +619,30 @@ The resolver and bootstrap copy an environment-provided key into a non-exported 
 The resolver sends the key to `curl` only as a header read from a file descriptor, never on argv, and nothing prints, logs, or writes it.
 The resolver fixes the endpoint at `https://api.typesafe.ai`, model at `jev-latest`, default confidence floor at 0.6, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
+
+## Local model availability (Pi models.json)
+
+A local model server can be switched off, and one such as llama.cpp behind llama-swap holds only one loaded model at a time, so Firstmate never hands work to a local model without asking the server first.
+`bin/fm-local-model.sh` owns the check: which Pi launches count as local, how Pi's effective `models.json` and `settings.json` are read, the single bounded read-only probe, the verdicts, and the exit codes; its header and `--help` own those mechanics.
+It reads Pi's own configuration rather than a second Firstmate setting, so the only setup is the Pi provider whose `baseUrl` points at the local server.
+The check runs at three points, and each asks the server again, so an earlier answer never authorizes a launch:
+
+- Session start: the deferred network stage prints one `BOOTSTRAP_INFO: local models: ...` line per local server named by a Pi profile in `config/crew-dispatch.json`, saying whether it answers, what is loaded, and which local candidates could take work now, or a single line saying `localSessions` is malformed, without probing.
+  It is informational, bounded by `FM_LOCAL_MODEL_TIMEOUT` (default 3 seconds) per server, and never delays the digest.
+- Every handoff: the dispatch intake reruns the check on the matched rule's and the default's Pi profiles under `quota-array-dispatch`, and the [typed resolver](#typed-dispatch-resolution-env-typesafe_api_key) does the same in code.
+  A local candidate that cannot take work now is not eligible, and when a local model fits the task but its server does not answer, firstmate tells the captain before opening any worker so the server can be started.
+- Every Pi launch: `fm-spawn.sh` reruns the check for ship, scout, secondmate, and relaunch spawns before any endpoint, worktree, or record exists, and refuses a local model that cannot take the work now.
+  `fm-control.sh relaunch` asks the same question before stopping the running agent.
+
+A model already loaded for another session is never switched away: a candidate that would make the server load a different model is refused as busy, and so is one whose server another of this home's task records uses with a different model, even while nothing is loaded.
+The server does not report how many sessions use a loaded model, so the per-model session limits are declared in `localSessions` under [Crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson) and counted from this home's task records: every `state/*.meta` record of a `pi` or `pi-signed` task whose model resolves to the same served model counts, whether or not its pane is still alive, and the task being launched or relaunched never counts itself.
+A relaunch may switch away from a loaded model that only its own task record uses, because it replaces that session; any other task record on that model keeps it busy.
+A remote secondmate's record names a `remote_host` and runs against that host's server, so it never counts here.
+When that count reaches the limit the verdict is `full`, naming the tasks that hold the sessions so a stale record can be reconciled; a malformed declaration makes every local candidate unknown and never gates cloud candidates.
+A ready verdict means the server answers, offers the model, needs no switch, and has a free declared session; sessions of other homes, such as a secondmate's own workers, are not counted, and a model without a declared limit keeps that capacity firstmate's disclosed judgment.
+Cloud candidates and other harnesses are never gated, and an unreadable Pi `models.json` only warns, so cloud routing keeps working while the local models are off.
+A local model that cannot take work is always refused and the captain is told; there is no bypass.
+Supported limits: a base URL counts as local only when its host is a loopback, private, link-local, or shared address or a local host name as the script header lists; extension-registered providers, project `.pi/settings.json` overrides, and raw launch commands are not inspected; and the check reads the agent directory of the process that runs it or the worker account pin's root, not an unpinned worker pane's own `PI_CODING_AGENT_DIR`.
 
 ## Toolchain
 
@@ -1183,6 +1212,8 @@ FM_BACKLOG_ROW_TIMEOUT_SECS=10   # seconds bounding each backlog row read (bin/f
 FM_BOOTSTRAP_DETECT_ONLY=0   # internal/read-only session-start mode: skip bootstrap's mutating sweeps and print advisory TANGLE wording
 FM_BOOTSTRAP_NETWORK=all   # internal session-start phase split: all, skip (local steps only), or only (network steps only); see bin/fm-bootstrap.sh
 FM_STARTUP_NETWORK_TIMEOUT=120   # seconds bounding the deferred inactive-outcome scan plus network checks, including the lock waits the worker makes before them; hitting it prints an actionable NETWORK_CHECKS line, and a lock a live process still holds at the deadline ends the worker with a failed-rerun record (publication and delivery are bounded by FM_SESSION_START_TIMEOUT the same way)
+FM_LOCAL_MODEL_TIMEOUT=3   # seconds bounding each local model server probe by bin/fm-local-model.sh; see "Local model availability"
+FM_PI_AGENT_DIR_OVERRIDE=  # alternate Pi agent directory for bin/fm-local-model.sh only, mainly for tests; unset means PI_CODING_AGENT_DIR, then ~/.pi/agent
 FM_TASKS_AXI_COMPATIBLE=   # internal one-hop handoff of an already-computed tasks-axi compatibility verdict (0 or 1); consumed when bin/fm-tasks-axi-lib.sh is sourced
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the guarded operation WILL still run.'   # banner continuation line; fm-send.sh overrides it to name the requested message specifically

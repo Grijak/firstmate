@@ -29,7 +29,10 @@
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
 #   candidate is unmeasured, never blocked), and the spendPriority argmax over
-#   the eligible candidates. The model never sees quota, catalogs, approvals,
+#   the eligible candidates. Every Pi profile the answer can select is also
+#   rechecked by bin/fm-local-model.sh on each run: an unavailable, busy,
+#   full, or unknown local candidate is not eligible, and the result says so
+#   before any worker opens. The model never sees quota, catalogs, approvals,
 #   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
 #   result so firstmate keeps using the existing intake.
 #   docs/configuration.md "Crew dispatch profiles" owns the declared fields and
@@ -41,7 +44,8 @@
 #     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
-#     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
+#     local: <notice naming local candidates that cannot take work now>   (only then)
+#     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [local=<verdict>] -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
@@ -185,6 +189,7 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   elif has("default") and duplicate_profiles(profiles(.default)) then "default must not contain duplicate harness, model, and effort profiles"
   elif has("default") and any(profiles(.default)[]; (verified(.harness) | not)) then "each default profile must name a verified harness"
   elif has("default") and any(profiles(.default)[]; (effort_ok(.harness; .model; .effort) | not)) then "each default profile effort must be supported by its harness and model"
+  elif has("localSessions") and ((.localSessions | type) != "object" or any(.localSessions | to_entries[]; (.key | test("^[^/]+/.+$") | not) or (.value | type) != "number" or .value < 1 or .value != (.value | floor))) then "localSessions must map provider/id model identities to positive integer session limits"
   else empty end
 ' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 [ -z "$rules_err" ] || die "malformed rules file: $RULES_PATH - $rules_err"
@@ -301,11 +306,37 @@ command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
 quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
+# ---- local model availability: rechecked on every resolution -------------------
+# Every Pi profile this answer can select - every rule's, because a rule's own
+# floor can hand the answer to a runner-up, plus the default's - is rechecked
+# now by bin/fm-local-model.sh, which owns the verdicts and asks each server
+# once; no earlier result is reused.
+LOCAL_JSON='{}'
+LOCAL_SPECS=()
+while IFS= read -r local_spec; do
+  [ -z "$local_spec" ] || LOCAL_SPECS+=("$local_spec")
+done < <(jq -r '
+  def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+  ([(.rules // [])[] | profiles(.use)[]] + profiles(.default // null))
+  | map(select(.harness == "pi" or .harness == "pi-signed") | .harness + (if (.model | type) == "string" then ":" + .model else "" end))
+  | unique | .[]' "$RULES")
+if [ "${#LOCAL_SPECS[@]}" -gt 0 ]; then
+  LOCAL_JSON=$("$SCRIPT_DIR/fm-local-model.sh" check "${LOCAL_SPECS[@]}" 2>/dev/null | jq -Rnc '
+    [inputs | capture("^local-model: (?<spec>[^ ]+) (?<verdict>[a-z-]+): (?<detail>.*)$")?]
+    | map({key: .spec, value: {verdict, detail}}) | from_entries') || LOCAL_JSON='{}'
+fi
+
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
+  --argjson local "$LOCAL_JSON" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+  def local_of($c):
+    if $c.harness == "pi" or $c.harness == "pi-signed" then
+      ($local[$c.harness + (if ($c.model | type) == "string" then ":" + $c.model else "" end)]
+        // {verdict: "unknown", detail: "the local model check did not answer"})
+    else null end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
   def bare($m): ($m | split("/") | last);
@@ -330,7 +361,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     end;
   def evidence($rows):
     $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), spendPriority: (.selection.spendPriority // null)});
-  def evaluate($c):
+  def evaluate_quota($c):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
     elif prov($p; $lane) == null then
@@ -374,6 +405,19 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
+  def evaluate($c):
+    (local_of($c)) as $lm |
+    if $lm != null and (["unavailable", "busy", "full", "unknown"] | index($lm.verdict)) != null then
+      {profile: $c, provider: provider_of($c), eligible: false, local: $lm, reason: "local model \($lm.verdict): \($lm.detail)"}
+    else
+      evaluate_quota($c) + (if $lm != null and $lm.verdict != "not-local" then {local: $lm} else {} end)
+    end;
+  def local_note:
+    ([.candidates[]? | select(.local != null) | select(.local.verdict as $v | (["unavailable", "busy", "full", "unknown"] | index($v)) != null)
+      | "\(.profile.harness):\(.profile.model // "default") \(.local.verdict)"]) as $held
+    | if ($held | length) > 0 then
+        . + {local_note: "local candidate(s) cannot take work now (\($held | join(", "))); if a local model fits this task, tell the captain before dispatching so the server can be started, then rerun"}
+      else . end;
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -444,7 +488,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
            else {} end)
       end
     end
-  end') || emit_error "resolution failed"
+  end
+  | local_note') || emit_error "resolution failed"
 
 TEXT=$(jq -r '
   def flat: tostring | gsub("[\t\r\n]"; " ");
@@ -459,10 +504,12 @@ TEXT=$(jq -r '
   (if .reason then "  reason: \(.reason | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
   (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
+  (if .local_note then "  local: \(.local_note | flat)" else empty end),
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
       + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
+      + (if .local then "  local=\(.local.verdict | flat)" else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)

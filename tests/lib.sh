@@ -63,6 +63,15 @@ unset FM_TASK_ID
 # against an ambient override sets TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
+# Point the local model check (bin/fm-local-model.sh) at a Pi agent directory
+# that never exists. Every Pi spawn, relaunch, typed resolution, and bootstrap
+# network run asks it, and it would otherwise read the developer's real Pi
+# configuration and probe a real local model server - refusing a fixture spawn
+# whenever that server is off. Only this check reads the override, so live
+# suites that launch a real pi keep its real configuration. A case that
+# exercises local model behavior sets its own directory.
+export FM_PI_AGENT_DIR_OVERRIDE=/nonexistent/fm-test-pi-agent-dir
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

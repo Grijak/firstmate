@@ -187,7 +187,7 @@ If the session lock cannot be acquired and verified, report its exact diagnostic
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
 
 The digest itself makes no external-network call and never waits for one.
-Every network check a session start owes - GitHub auth, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, and project clone refresh - runs off the digest's blocking path in a bounded worker owned by `bin/fm-startup-network.sh` and is reported in the digest's own `NETWORK CHECKS` section.
+Every network check a session start owes - GitHub auth, the informational local model availability observation, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, and project clone refresh - runs off the digest's blocking path in a bounded worker owned by `bin/fm-startup-network.sh` and is reported in the digest's own `NETWORK CHECKS` section.
 The locked startup inactive-outcome scan joins that worker so a slow local current-state read cannot block the digest; its findings use the ordinary durable wake queue.
 When that section reports its checks still in progress it names exactly what is unconfirmed; treat none of those as passed until `bin/fm-startup-network.sh report` returns the finished result, while a failed or otherwise actionable result also arrives as a `check: startup-network` wake.
 
@@ -240,6 +240,7 @@ When every candidate is tight, preserve the captain's strongest-reasoning class 
 Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the TOON-first spendPriority selection procedure.
+Also load it before every handoff whose matched rule or default names a Pi profile, and recheck local model availability there; `fm-spawn` refuses any Pi launch whose local model server cannot take the work now.
 Run `bin/fm-dispatch-resolve.sh` directly on the written brief in the same turn, with no preflight, and on `clear` pass its `profile:` line to `fm-spawn` unless you state a reason to override; `ambiguous`, `escalate`, `error`, and off all mean the intake above, unchanged (contract: `docs/configuration.md` "Typed dispatch resolution").
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
@@ -596,7 +597,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `PRESENTATION_UNAVAILABLE:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `NETWORK_CHECKS:`, `HOME_SUMMARY:`, `BACKLOG_RECONCILE:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`), or when `BOOTSTRAP_INFO:` says an interrupted backlog cleanup may have left an endpoint or local copy; silence and other `BOOTSTRAP_INFO:` facts need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding.
-- `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi default TOON.
+- `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi default TOON, and before every crewmate or scout handoff whose matched rule or default names a Pi profile.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `project-management` - load before adding, creating, removing, or initializing a project.

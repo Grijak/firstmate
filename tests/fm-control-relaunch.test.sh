@@ -778,6 +778,64 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   pass "native Ultra relaunch preserves its profile and rejects an unsupported model before stopping"
 }
 
+# A replacement onto a local model its server cannot take now must refuse
+# before the running agent stops. A loaded model that only the relaunched
+# task's own record uses may be switched away from, because the relaunch
+# replaces that session; another task record on it keeps the model busy.
+test_local_model_relaunch_refuses_before_stop() {
+  local dir out rc id=rl-local port pid
+  dir=$(new_case local-model "$id")
+  add_ship_task "$dir" "$id" pi
+  printf pi > "$dir/fake/command"
+  printf pi > "$dir/fake/becomes"
+  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
+  chmod +x "$dir/fakebin/pi"
+  port=$(perl -MIO::Socket::INET -e '
+    my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 1, Proto => "tcp") or die;
+    print $s->sockport, "\n"; close $s;')
+  mkdir -p "$dir/user-home/.pi/agent"
+  printf '{"providers":{"local-ai":{"baseUrl":"http://127.0.0.1:%s/v1","models":[{"id":"qwen-agent"},{"id":"qwen-fast"}]}}}\n' "$port" \
+    > "$dir/user-home/.pi/agent/models.json"
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "local server offline"); rc=$?
+  expect_code 1 "$rc" "a relaunch onto an offline local model must refuse"
+  assert_contains "$out" "the replacement for $id cannot take its local model now, so the running agent was left untouched: pi:local-ai/qwen-agent unavailable: the local model server http://127.0.0.1:$port/v1 is unreachable" \
+    "the refusal should name the offline local server"
+  [ "$(cat "$dir/fake/command")" = pi ] || fail "an offline local model must refuse before the running agent stops"
+  [ ! -s "$dir/fake/literal" ] || fail "an offline local model must refuse before any lifecycle input is sent"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" || fail "a refused relaunch must leave the task record untouched"
+
+  printf '%s\n' '{"data":[{"id":"qwen-fast","status":{"value":"loaded"}},{"id":"qwen-agent","status":{"value":"unloaded"}}]}' > "$dir/models-body"
+  perl -MIO::Socket::INET -e '
+    my ($port, $file) = @ARGV;
+    my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $port, Listen => 16, ReuseAddr => 1, Proto => "tcp") or die "listen: $!";
+    while (my $c = $s->accept) {
+      while (my $h = <$c>) { last if $h =~ /^\r?\n$/; }
+      open(my $bf, "<", $file) or die; local $/; my $body = <$bf>; close $bf;
+      print $c "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " . length($body) . "\r\nConnection: close\r\n\r\n$body";
+      close $c;
+    }' "$port" "$dir/models-body" >/dev/null 2>&1 </dev/null &
+  pid=$!
+  until curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$port/v1/models"; do sleep 0.05; done
+  printf 'model=local-ai/qwen-fast\n' >> "$dir/home/state/$id.meta"
+  printf 'harness=pi\nmodel=local-ai/qwen-fast\nkind=ship\n' > "$dir/home/state/rl-other.meta"
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch while another task holds qwen-fast"); rc=$?
+  expect_code 1 "$rc" "a relaunch that would switch away from a model another task uses must refuse"
+  assert_contains "$out" "pi:local-ai/qwen-agent busy: task(s) rl-other (qwen-fast) use another model of http://127.0.0.1:$port/v1" \
+    "the refusal should name the other task on the loaded model"
+  [ "$(cat "$dir/fake/command")" = pi ] || fail "a busy local model must refuse before the running agent stops"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" || fail "a refused relaunch must leave the task record untouched"
+
+  rm -f "$dir/home/state/rl-other.meta"
+  out=$(FM_PI_AGENT_DIR_OVERRIDE="$dir/user-home/.pi/agent" FM_LOCAL_MODEL_TIMEOUT=1 run_control "$dir" "$id" relaunch --model local-ai/qwen-agent --note "switch the sole local session"); rc=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$rc" "a relaunch of the sole session on the loaded model should switch it: $out"
+  [ "$(meta_field "$dir" "$id" model)" = local-ai/qwen-agent ] || fail "the relaunch should record the new local model"
+  pass "fm-control relaunch: an unavailable or busy local model refuses before the old agent stops, and the sole session may switch its own loaded model"
+}
+
 # A fake claude that answers `claude auth status` the way the real runner
 # does: signed in only when the selected config root holds a stored login.
 make_claude_auth_stub() {  # <case-dir>
@@ -2366,6 +2424,7 @@ test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_codex_relaunch_keeps_standard_service_tier_and_profile
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
+test_local_model_relaunch_refuses_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_explicit_model_wins_over_the_recorded_one

@@ -617,6 +617,27 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
+## Local model check reads Pi's configuration
+
+`bin/fm-local-model.sh` decides which local model server and model id a Pi launch will use from Pi's own configuration: the agent directory, `models.json` with comments and trailing commas, a model's `baseUrl` over its provider's, and the strict-JSON `settings.json` default model.
+`tests/fm-local-model-live-e2e.test.sh` writes a throwaway agent directory whose provider `baseUrl` is a closed port while each model's own `baseUrl` is a local stand-in for an OpenAI-compatible server, then runs the real Pi in print mode.
+The stand-in received the chat request for exactly the model id the check probed, both for `--model fm-live/m-live` and for a launch with no model resolved from `settings.json`.
+With a trailing comma in `settings.json`, Pi requested a model other than the named default, so the check reports that launch as unknown rather than claiming a default Pi ignores.
+
+Verified 2026-09-24 on pi 0.86.1 on macOS arm64; pi-signed was not installed.
+
+```sh
+bash tests/fm-local-model-live-e2e.test.sh
+```
+
+```
+ok - pi 0.86.1: the check resolves the same server and model id Pi requests, for a named model and for Pi's default, and parses settings as strictly as Pi
+skip-runner: pi-signed is not installed, so its configuration was not exercised
+# local model live guard checked: pi
+```
+
+The stand-in server answers locally, so the guard spends no tokens and runs by default wherever Pi is installed; rerun it after every Pi upgrade.
+
 ## Codex hook trust
 
 Verified 2026-09-16 on codex-cli 0.151.0, macOS arm64, in a fresh linked worktree of this repository.

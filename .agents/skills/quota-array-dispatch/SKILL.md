@@ -4,7 +4,8 @@ description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, ranking by spendPriority after three
   orthogonal gates.
-  Load when a dispatch rule or default resolves to more than one profile candidate.
+  Load when a dispatch rule or default resolves to more than one profile candidate,
+  and before every crewmate or scout handoff whose matched rule or default names a Pi profile.
 user-invocable: false
 metadata:
   internal: true
@@ -55,6 +56,24 @@ Read `quota-axi auth --json` only when a candidate's credential surface is in qu
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
+## Local model availability
+
+Before every crewmate or scout handoff whose matched rule or default names a Pi profile, run `bin/fm-local-model.sh check` once on all of those Pi profiles at this intake, even when you expect a cloud candidate to win.
+Never reuse the session-start observation or an earlier intake's answer; `bin/fm-spawn.sh` asks the server again at launch anyway.
+The script's header owns the verdicts, which feed the eligibility gate below:
+
+- `ready` keeps the local candidate eligible; it already counts this home's task records against the model's declared `localSessions` limit, and sessions outside this home's records stay disclosed uncertainty.
+- `full` means that declared session limit is reached; it names the occupying tasks, so reconcile a stale one rather than exceed the limit.
+- `unavailable`, `busy`, `full`, and `unknown` block the candidate for this handoff.
+  Never make room by switching the server's loaded model, and never interrupt a running local session.
+- `unchecked` vouches for no local candidate, so do not choose one you know to be local; cloud candidates are unaffected.
+- `not-local` needs nothing further.
+
+When a blocked local candidate fits the task better than the cloud candidates, tell the captain in one plain sentence before opening any worker session: the task suits the local model, its server is not answering or is serving another model, and they can start it or free it now.
+While the captain is present, hold that handoff for the answer, then recheck and dispatch the local candidate only on `ready`, or dispatch the best eligible cloud candidate if they decline.
+While the captain is away, do not wait: dispatch the best eligible cloud candidate and carry the same sentence into the outcome.
+There is no bypass: treat an `fm-spawn` refusal as this gate's answer rather than something to retry.
+
 ## Three gates, then spendPriority
 
 Apply the three cheap orthogonal gates first.
@@ -66,6 +85,7 @@ It cannot override a hard-gate failure, and it is never hidden inside a new comp
 Outside those documented mappings, deterministic shell must not infer a provider family or credential store from a harness, model, or source name.
 You establish the remaining relations yourself, in the open, from the candidate's own authoritative catalog (`harness-adapters` owns the per-harness discovery surface) plus the one intake snapshot.
 
+A local model candidate must also pass the local model availability check above at this intake.
 Confirm the catalog lists the candidate's model and record the provider family it reports.
 A model the catalog does not list is concrete contradictory evidence: block that candidate and quote the catalog result.
 Apply quota at the granularity the vendor actually supplies.

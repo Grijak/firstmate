@@ -324,6 +324,18 @@
 #   account_provider=) in the task record and on the spawned line. A local
 #   secondmate reads this launching home's file; pins are never inherited.
 #   bin/fm-worker-account-lib.sh owns parsing, the check, and the shed list.
+# Local model availability (bin/fm-local-model.sh):
+#   Every canonical pi or pi-signed launch - ship, scout, secondmate, and
+#   relaunch - runs `fm-local-model.sh check` on its harness and model, under
+#   the pinned Pi root when one applies, before any endpoint, worktree, or
+#   record exists. A model served by a local model server that is unreachable,
+#   does not offer it, would have to switch away from another loaded model or
+#   from a model this home's task records use, has reached its declared session
+#   limit, or cannot rule that out refuses the spawn with the check's own reason.
+#   The check excludes the task's own record, so a relaunch never counts itself,
+#   and each batch pair is checked after the previous pair's record exists.
+#   Cloud models and other harnesses pass untouched, an unreadable Pi
+#   models.json only warns, and a raw launch command is not inspected.
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
@@ -2330,6 +2342,29 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   else
     unset CLAUDE_CONFIG_DIR
   fi
+fi
+# Local model availability (header above): rechecked for every canonical Pi
+# launch, after the account pin fixes which Pi configuration the worker reads
+# and before any endpoint, worktree, or record exists, so no worker is ever
+# opened against a local model server that is down or would have to switch
+# models. No earlier observation or dispatch-time answer substitutes for it.
+if [ "$RAW_LAUNCH" = 0 ]; then
+  case "$HARNESS" in
+  pi | pi-signed)
+    LOCAL_MODEL_SPEC=$HARNESS
+    [ -z "$MODEL" ] || [ "$MODEL" = default ] || LOCAL_MODEL_SPEC="$HARNESS:$MODEL"
+    LOCAL_MODEL_ARGS=(--task "$ID")
+    [ -z "$WORKER_ACCOUNT_ROOT" ] || LOCAL_MODEL_ARGS+=(--agent-dir "$WORKER_ACCOUNT_ROOT")
+    if ! LOCAL_MODEL_OUT=$(FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-local-model.sh" check "${LOCAL_MODEL_ARGS[@]}" "$LOCAL_MODEL_SPEC" 2>&1); then
+      echo "error: refusing to launch $ID on a local model that cannot take it now: ${LOCAL_MODEL_OUT#local-model: } (recheck with bin/fm-local-model.sh check $LOCAL_MODEL_SPEC)" >&2
+      exit 1
+    else
+      case "$LOCAL_MODEL_OUT" in
+      *" unchecked: "*) echo "warning: ${LOCAL_MODEL_OUT#local-model: }" >&2 ;;
+      esac
+    fi
+    ;;
+  esac
 fi
 
 secondmate_registry_value() {

@@ -77,6 +77,10 @@
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
+#          When config/crew-dispatch.json has Pi profiles served by a local
+#          model server, the network phase prints one "BOOTSTRAP_INFO: local
+#          models: ..." fact per server from bin/fm-local-model.sh observe. It
+#          is informational only: every local handoff is rechecked at dispatch.
 #          Fleet sync fetches, fast-forwards safe default-branch states, reports
 #          recovered and STUCK clone drift, and prunes gone local branches; it is
 #          bounded by FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT when it is a non-empty
@@ -121,14 +125,16 @@
 #                 step. Unrecognized values fall back here on purpose: a typo
 #                 must never silently skip a safety sweep.
 #            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
+#                 `gh auth status`, the local model observation,
+#                 secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
 #                 reconciliation, no x_mode_setup: those already ran on the
 #                 local pass.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
-#          detect-only is the read-only `gh auth status` probe on its own.
+#          detect-only is the read-only `gh auth status` probe plus the
+#          read-only local model observation.
 #          bin/fm-startup-network.sh owns the deferral: it runs the `only` phase
 #          in a detached bounded worker and publishes the result. This file stays
 #          the single owner of every sweep, and the split changes only WHEN each
@@ -1126,6 +1132,7 @@ crew_dispatch_validate() {
       else "default profile model and effort must be non-empty strings when present"
       end
     elif $typed and has("default") and malformed_profile_floors([profiles(.default)[]?]) then "default profile floor needs scope and min_percent 0..100"
+    elif has("localSessions") and ((.localSessions | type) != "object" or any(.localSessions | to_entries[]; (.key | test("^[^/]+/.+$") | not) or (.value | type) != "number" or .value < 1 or .value != (.value | floor))) then "localSessions must map provider/id model identities to positive integer session limits"
     else
       (configured_profiles
         | map(.harness)
@@ -1161,6 +1168,17 @@ crew_dispatch_validate() {
     | .[]
   ' "$file"
   fi
+}
+
+# Informational startup observation of the local model servers named by this
+# home's Pi dispatch profiles. bin/fm-local-model.sh owns resolution, the
+# bounded read-only probe, and the wording; it never gates anything, because
+# every local handoff is rechecked at dispatch and again by bin/fm-spawn.sh.
+local_model_observe() {
+  [ -f "$CONFIG/crew-dispatch.json" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  "$SCRIPT_DIR/fm-local-model.sh" observe --rules "$CONFIG/crew-dispatch.json" 2>/dev/null \
+    | sed 's/^/BOOTSTRAP_INFO: /'
 }
 
 # Same-home record reconciliation. Every ordinary dispatch and completion now
@@ -1533,6 +1551,9 @@ if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  local_model_observe
+  fm_timing_record phase local-models "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
 

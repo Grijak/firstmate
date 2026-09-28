@@ -23,6 +23,8 @@ BASE_RULES="$TMP_ROOT/rules.json"
 RULES="$HOME_DIR/config/crew-dispatch.json"
 QUOTA="$TMP_ROOT/quota.json"
 BASE_PATH=$PATH
+# The local model recheck reads this suite's own Pi configuration.
+export FM_PI_AGENT_DIR_OVERRIDE="$TMP_ROOT/pi-agent"
 mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
 for command_name in bash chmod cp dirname jq mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
@@ -116,6 +118,22 @@ else
   printf 'curl:clean\n' >> "${CHILD_ENV_LOG:?}"
 fi
 out=''
+# A local model server probe (bin/fm-local-model.sh) is answered from
+# FAKE_LOCAL_MODELS, or refused like an offline server, and never touches the
+# typesafe.ai request log.
+for arg in "$@"; do
+  case "$arg" in
+    http://127.0.0.1:*/v1/models)
+      printf '%s\n' "$arg" >> "${FAKE_CURL_LOG:?}/local-probes"
+      [ -n "${FAKE_LOCAL_MODELS:-}" ] || exit 7
+      while [ $# -gt 0 ]; do
+        case "$1" in -o) cp "$FAKE_LOCAL_MODELS" "$2"; shift 2 ;; *) shift ;; esac
+      done
+      printf '200'
+      exit 0
+      ;;
+  esac
+done
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift 2 ;;
@@ -883,6 +901,8 @@ for bad in \
   '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-5.5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}]}]}|each rule use must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":[{"harness":"claude","model":"opus"},{"harness":"claude","model":"opus"}]}|default must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"spaceship"}}]}|each use profile must name a verified harness' \
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"localSessions":{"local-ai/qwen-fast":0}}|localSessions must map provider/id model identities to positive integer session limits' \
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"localSessions":{"qwen-fast":1}}|localSessions must map provider/id model identities to positive integer session limits' \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \
   '{"rules":[{"when":"x","use":{"harness":"rovo"}}]}|use profiles whose harness lacks one authoritative provider family require provider: rovo' \
@@ -905,5 +925,69 @@ run code out err --help
 expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
+
+# --- local model candidates are rechecked on every resolution -----------------
+mkdir -p "$FM_PI_AGENT_DIR_OVERRIDE"
+printf '{"providers":{"local-ai":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"qwen-agent"}]}}}\n' \
+  > "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+jq '.rules[3].use += [{"harness": "pi", "model": "local-ai/qwen-agent", "provider": "local-ai"}]' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+expect_code 0 "$code" "an offline local candidate still resolves"
+assert_contains "$out" '  status: clear' "the cloud candidates still clear while the local server is offline"
+assert_contains "$out" "candidate: pi:local-ai/qwen-agent  provider=local-ai  local=unavailable  -> not eligible: local model unavailable: the local model server http://127.0.0.1:9/v1 is unreachable (no connection)" \
+  "the offline local candidate is not eligible, with the server named"
+assert_contains "$out" "  local: local candidate(s) cannot take work now (pi:local-ai/qwen-agent unavailable); if a local model fits this task, tell the captain before dispatching so the server can be started, then rerun" \
+  "the result carries the pre-handoff notice"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the best cloud candidate is the profile"
+assert_equals "http://127.0.0.1:9/v1/models" "$(cat "$LOG/local-probes")" "the local server is asked once per resolution"
+
+reset_log
+printf '%s\n' '{"data":[{"id":"qwen-agent","status":{"value":"loaded"}}]}' > "$TMP_ROOT/local-models.json"
+FAKE_LOCAL_MODELS="$TMP_ROOT/local-models.json" TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "candidate: pi:local-ai/qwen-agent  provider=local-ai  local=ready  -> eligible, unranked: provider local-ai not in the quota snapshot: disclosed uncertainty" \
+  "a ready local candidate stays eligible and discloses its unmeasured quota"
+assert_not_contains "$out" "  local: " "a ready local candidate needs no notice"
+cp "$RULES" "$TMP_ROOT/local-rules.json"
+jq '.rules[1].min_confidence = 0.9 | .rules[3].min_confidence = 0.1
+  | .rules[3].use += [{"harness": "pi", "model": "openai-codex/gpt-5.6-luna", "provider": "openai-codex"}]' \
+  "$TMP_ROOT/local-rules.json" > "$RULES"
+reset_log
+write_floor_response "$RESPONSE" rule_2 0.76 0.02 0.76 0.02 0.18 0.02
+FAKE_LOCAL_MODELS="$TMP_ROOT/local-models.json" TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  fallback: rule_4 ' "the runner-up rule takes the answer"
+assert_contains "$out" "candidate: pi:local-ai/qwen-agent  provider=local-ai  local=ready  -> eligible" \
+  "a runner-up rule's local candidate gets its real local verdict"
+assert_not_contains "$out" "the local model check did not answer" "no runner-up Pi candidate is excluded for lack of a local verdict"
+assert_not_contains "$out" "candidate: pi:openai-codex/gpt-5.6-luna  provider=openai-codex  local=" "a runner-up rule's cloud Pi candidate carries no local verdict"
+cp "$TMP_ROOT/local-rules.json" "$RULES"
+write_response "$RESPONSE" rule_4 0.9
+reset_log
+printf '%s\n' '{"data":[{"id":"qwen-agent","status":{"value":"unloaded"}},{"id":"qwen-deep","status":{"value":"loaded"}}]}' > "$TMP_ROOT/local-models.json"
+FAKE_LOCAL_MODELS="$TMP_ROOT/local-models.json" TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "local=busy  -> not eligible: local model busy: qwen-deep is loaded on http://127.0.0.1:9/v1; starting qwen-agent would make the server switch models" \
+  "a local candidate that would switch the loaded model is not eligible"
+reset_log
+printf '%s\n' '{"data":[{"id":"qwen-agent","status":{"value":"loaded"}}]}' > "$TMP_ROOT/local-models.json"
+jq '.localSessions = {"local-ai/qwen-agent": 1}' "$RULES" > "$RULES.tmp" && mv "$RULES.tmp" "$RULES"
+mkdir -p "$HOME_DIR/state"
+printf 'harness=pi\nmodel=local-ai/qwen-agent\nkind=ship\n' > "$HOME_DIR/state/held-local.meta"
+FAKE_LOCAL_MODELS="$TMP_ROOT/local-models.json" TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "the cloud candidates still clear while the local model is full"
+assert_contains "$out" "local=full  -> not eligible: local model full: 1 of 1 sessions for local-ai/qwen-agent are in use by task(s) held-local" \
+  "a local candidate at its session limit is not eligible"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the best cloud candidate is the profile"
+rm -f "$HOME_DIR/state/held-local.meta"
+jq 'del(.localSessions)' "$RULES" > "$RULES.tmp" && mv "$RULES.tmp" "$RULES"
+reset_log
+printf '{"providers": {' > "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "candidate: pi:local-ai/qwen-agent  provider=local-ai  local=unchecked  -> eligible, unranked" \
+  "an unreadable Pi configuration is disclosed on the candidate without blocking it"
+assert_not_contains "$out" "  local: " "an unreadable Pi configuration is not reported as a server the captain could start"
+cp "$BASE_RULES" "$RULES"
+rm -f "$FM_PI_AGENT_DIR_OVERRIDE/models.json"
+pass "local model candidates are rechecked on every resolution and never selected while unavailable, busy, or full"
 
 printf '# all fm-dispatch-resolve tests passed\n'
