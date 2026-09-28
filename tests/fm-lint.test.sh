@@ -1795,6 +1795,61 @@ test_roots_sidecar_records_per_root_lifecycle() {
   pass "the retained sidecar records each root's lifecycle with a mode, reason, and duration"
 }
 
+# Regression origin: fm_lint_now_ms split EPOCHREALTIME on '.', so under a
+# locale whose radix is a comma (de_DE) bash's arithmetic rejected the value and
+# the recorded start/end times were garbage. Both radix characters must work.
+fm_lint_locale_with_radix() {  # <radix> <locale>... -> first locale using it
+  local radix=$1 candidate
+  shift
+  for candidate in "$@"; do
+    case "$(LC_ALL=$candidate bash -c 'printf %s "$EPOCHREALTIME"' 2>/dev/null)" in
+      *"$radix"*) printf '%s\n' "$candidate"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+fm_lint_assert_root_timing_under_locale() {  # <locale>
+  local loc=$1 tmp fakebin stub_log telemetry roots_log out rc
+  local before after start_ms end_ms
+  tmp=$(fm_test_tmproot fm-lint-radix)
+  fakebin=$(fm_fakebin "$tmp")
+  stub_log="$tmp/stub.log"
+  fm_lint_stub_shellcheck "$fakebin" "$stub_log"
+  telemetry="$tmp/lint.tsv"
+  roots_log="$tmp/lint.roots.tsv"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/alpha.sh"
+
+  before=$(( $(date +%s) * 1000 ))
+  rc=0
+  out=$(LC_ALL=$loc PATH="$fakebin:$PATH" FM_TEST_STUB_LOG="$stub_log" \
+    "$LINT" --telemetry "$telemetry" "$tmp/alpha.sh" 2>&1) || rc=$?
+  after=$(( $(date +%s) * 1000 + 1000 ))
+  [ "$rc" -eq 0 ] || fail "lint failed under $loc"$'\n'"$out"
+  start_ms=$(awk -F '\t' '$1 == "begin" { print $6; exit }' "$roots_log")
+  end_ms=$(awk -F '\t' '$1 == "end" { print $7; exit }' "$roots_log")
+  case "$start_ms$end_ms" in
+    ''|*[!0-9]*) fail "root timestamps were not plain integers under $loc: start=$start_ms end=$end_ms"$'\n'"$out" ;;
+  esac
+  { [ "$start_ms" -ge "$before" ] && [ "$end_ms" -le "$after" ] && [ "$end_ms" -ge "$start_ms" ]; } \
+    || fail "root timestamps under $loc were not real epoch milliseconds: start=$start_ms end=$end_ms window=$before..$after"
+}
+
+test_root_timing_works_under_decimal_comma_and_point_locales() {
+  local comma point
+  comma=$(fm_lint_locale_with_radix , de_DE.UTF-8 de_DE.utf8 de_DE fr_FR.UTF-8 fr_FR.utf8) || comma=""
+  point=$(fm_lint_locale_with_radix . en_US.UTF-8 en_US.utf8 en_US C.UTF-8 C) || point=""
+  if [ -z "$comma" ]; then
+    pass "SKIP (no decimal-comma locale installed): root timing under a decimal-comma locale"
+  else
+    fm_lint_assert_root_timing_under_locale "$comma"
+    pass "root timing yields epoch milliseconds under a decimal-comma locale ($comma)"
+  fi
+  [ -n "$point" ] || fail "no decimal-point locale is usable for the root timing check"
+  fm_lint_assert_root_timing_under_locale "$point"
+  pass "root timing yields epoch milliseconds under a decimal-point locale ($point)"
+}
+
 test_seeded_module_boundary_parity() {
   if ! pinned_ready; then
     pass "SKIP (ShellCheck $REQUIRED not resolved): seeded source-boundary parity check"
@@ -1897,6 +1952,7 @@ test_require_bounds_refuses_when_enforcement_is_missing
 test_pinned_shellcheck_memory_limit
 test_sidecar_result_exit_reflects_final_status
 test_roots_sidecar_records_per_root_lifecycle
+test_root_timing_works_under_decimal_comma_and_point_locales
 test_seeded_module_boundary_parity
 test_changed_mode_lints_only_the_changed_file
 test_ci_forces_full_lint_even_with_empty_diff
