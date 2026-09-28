@@ -561,9 +561,14 @@ cmd_choice_rows() {
   local selection=$1 file=${2-}
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  perl -MJSON::PP -e '
+  perl -MJSON::PP -MEncode=decode -e '
     use strict; use warnings;
     my ($selection, $path) = @ARGV;
+    # The result is read as raw bytes. decode_json turns the context into
+    # characters and the label below is decoded to match, so every printed
+    # field is characters and STDOUT re-encodes them as UTF-8; without the
+    # layer a character such as "a" with umlaut leaves as one Latin-1 byte.
+    binmode STDOUT, ":encoding(UTF-8)";
     open my $fh, "<", $path or exit 1;
     my (@fields, $want, @rows);
     while (my $line = <$fh>) {
@@ -637,7 +642,7 @@ cmd_choice_rows() {
           || ($data->{close} ne "done" && $data->{close} ne "release");
         $mode = $data->{close};
       }
-      my $label = defined $f{text} ? $f{text} : "";
+      my $label = defined $f{text} ? decode("UTF-8", $f{text}) : "";
       s/[\x00-\x1f\x7f]/ /g for ($answer, $note, $label);
       $label = substr($label, 0, 512);
       if (defined $seen{$key}) { $choices[$seen{$key}] = undef }
