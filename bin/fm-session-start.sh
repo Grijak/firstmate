@@ -28,6 +28,8 @@
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
+#   1b. home role    - the resolved firstmate-repository role line
+#                      (bin/fm-role.sh report), purely local, no network.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
 #                       when this session actually holds the lock. Detect-only
 #                       diagnostics always run. Bootstrap's six MUTATING sweeps
@@ -39,6 +41,9 @@
 #   3. wake-drain     - presents durable wakes and advances recovery handling
 #                       state, so it only runs when locked. The local bounded
 #                       inactive-outcome startup scan runs in the deferred worker.
+#                       First, on every harness and away posture, it seeds the
+#                       outcome store's display tail copy when that is absent
+#                       (bin/fm-branch-outcome.sh seed-tail).
 #   4. supervision-instructions - the one emitted operating block for the
 #                       detected primary harness.
 #   5. read-once contract - the do-not-re-read contract covering every source
@@ -63,7 +68,7 @@
 #                       script points back to the emitted harness supervision
 #                       block and deliberately never arms the watcher itself.
 #
-# Those nine names are also the runtime-bound stage list below, so a truncated
+# Those ten names are also the runtime-bound stage list below, so a truncated
 # startup can name exactly which of them never ran - and the parent banners
 # EVERY nonzero child exit, not only the bound: a child that dies or is killed
 # mid-stage must never truncate the digest silently.
@@ -216,7 +221,9 @@
 #             already treats a lock owned through shared ancestry or a trusted
 #             same-session Claude id as its own, so the re-emit proceeds, while
 #             a lock another live session took meanwhile still produces the
-#             ordinary read-only path.
+#             ordinary read-only path. A re-emit prints a short RE-EMIT CUE
+#             first, so a harness that spills a large output and shows only its
+#             head still tells the model to read the saved full output.
 #
 #   --source  The native session-open source, supplied only by
 #             fm-sessionstart-run.sh. A genuine `startup` that owns the active
@@ -272,7 +279,7 @@ done
 # The ordered stage list is the contract behind the truncation banner: the child
 # names the stage it is entering, and the parent reports every stage at or after
 # that one as never emitted. Keep it in the exact order the digest prints.
-SESSION_START_STAGES='lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
+SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
@@ -368,6 +375,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
+# shellcheck source=bin/fm-hold-reason-lib.sh
+. "$SCRIPT_DIR/fm-hold-reason-lib.sh"
 
 # One tasks-axi compatibility verdict per session start. The probe costs three
 # tasks-axi subprocesses and this digest needs the same answer twice - here for
@@ -467,7 +476,7 @@ print_backlog_manual_compact() {
         }
       }
     }
-  ' "$path"
+  ' "$path" | fm_hold_reason_decode_stream markdown
 }
 
 # tasks-axi closes every listing with its own help block. This section composes
@@ -519,11 +528,11 @@ print_backlog_tasks_axi_compact() {
     printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
       "$QUEUED_LIMIT"
     printf '\nin flight:\n'
-    printf '%s\n' "$in_flight" | strip_axi_help
+    printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-    printf '%s\n' "$held" | strip_axi_help
+    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nblocked queued:\n'
-    printf '%s\n' "$blocked" | strip_axi_help
+    printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nready queued (dispatchable now):\n'
     print_ready_queued_bounded "$ready"
     return 0
@@ -662,6 +671,12 @@ if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
 fi
 
 if [ "$REEMIT" -eq 1 ]; then
+  # First in the output on purpose: a harness that spills a large hook output
+  # delivers only a short head inline (Claude: about 2,000 characters), and
+  # CONTEXT prints last, so this cue is the part that must survive the spill.
+  printf 'RE-EMIT CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
+  printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
+  printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
   printf 'This session already took the helm at its own startup and has only lost its\n'
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
@@ -697,6 +712,15 @@ if [ "$LOCK_RC" -ne 0 ]; then
 fi
 REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
 print_agents_refresh_if_required "$REBUILDING_SESSION_PID"
+
+# --- 1b. home role -------------------------------------------------------
+# This home's firstmate-repository role: user/operator unless an explicit
+# local or receipt-proven inherited grant says otherwise (bin/fm-role-lib.sh).
+# Purely local resolution - no network, no gh call.
+stage role
+subsection "HOME ROLE"
+FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-role.sh" report 2>/dev/null \
+  || printf 'fm-role: unknown (bin/fm-role.sh report failed)\n'
 
 if [ "$READ_ONLY" -eq 0 ]; then
   if [ "$REEMIT" -eq 0 ]; then
@@ -772,6 +796,7 @@ if [ "$READ_ONLY" -eq 1 ]; then
   GUARD_OUT=$(FM_GUARD_READ_ONLY=1 "$SCRIPT_DIR/fm-guard.sh" 2>&1)
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-branch-outcome.sh" seed-tail >/dev/null 2>&1 || true
   # Pi supervision-branch recovery, locked path only: clear leases whose
   # supervising session died, and surface outcomes the branch stored durably
   # that never reached main (docs/pi-supervision-branch.md). Gated to the
@@ -831,7 +856,20 @@ if [ "$PRIMARY_HARNESS" = omp ]; then
   OMP_TURNEND_VERSION=$(fm_pi_extension_version "$OMP_TURNEND_EXT" || printf '')
   if ! fm_pi_extension_loaded "$OMP_WATCH_MARKER" "$OMP_WATCH_VERSION" "$OMP_LOCK" \
     || ! fm_pi_extension_loaded "$OMP_TURNEND_MARKER" "$OMP_TURNEND_VERSION" "$OMP_LOCK"; then
-    printf 'OMP_WATCH_EXTENSION: not loaded - restart omp with this home as its working directory so %s and %s auto-load from .omp/extensions/ for turn-end guard and background wake coverage; pass -e %s -e %s only when omp must start from another directory, never together with auto-discovery (omp loads a file named both ways twice)\n' "$OMP_TURNEND_EXT" "$OMP_EXT" "$OMP_TURNEND_EXT" "$OMP_EXT"
+    OMP_HOME_PHYS=$(cd -P "$FM_HOME" 2>/dev/null && pwd -P || printf '%s' "$FM_HOME")
+    OMP_ROOT_PHYS=$(cd -P "$FM_ROOT" 2>/dev/null && pwd -P || printf '%s' "$FM_ROOT")
+    if [ "$OMP_HOME_PHYS" = "$OMP_ROOT_PHYS" ]; then
+      printf 'OMP_WATCH_EXTENSION: not loaded - restart omp with this home as its working directory so %s and %s auto-load from .omp/extensions/ for turn-end guard and background wake coverage; pass -e %s -e %s only when omp must start from another directory, never together with auto-discovery (omp loads a file named both ways twice)\n' "$OMP_TURNEND_EXT" "$OMP_EXT" "$OMP_TURNEND_EXT" "$OMP_EXT"
+    else
+      # shellcheck disable=SC2016  # backticks are literal text in the diagnostic
+      printf 'OMP_WATCH_EXTENSION: not loaded - exit omp and relaunch through `fm <project>` (the launcher sets FM_HOME and --cwd) so %s and %s auto-load for this home; a bare omp or /resume from the firstmate checkout does not register the extensions for this home\n' "$OMP_TURNEND_EXT" "$OMP_EXT"
+    fi
+    # Warning only: name the cause when existing facts establish it.
+    OMP_MARKER_PID=$(sed -n '2p' "$OMP_WATCH_MARKER" 2>/dev/null || true)
+    OMP_CURRENT_PID=${REBUILDING_SESSION_PID:-$(sed -n '1p' "$OMP_LOCK" 2>/dev/null || true)}
+    if [ -n "$OMP_MARKER_PID" ] && [ -n "$OMP_CURRENT_PID" ] && [ "$OMP_MARKER_PID" != "$OMP_CURRENT_PID" ]; then
+      printf 'OMP_WATCH_CAUSE: the extension marker %s names pid %s, which is not this session (pid %s)\n' "$OMP_WATCH_MARKER" "$OMP_MARKER_PID" "$OMP_CURRENT_PID"
+    fi
   fi
 fi
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
@@ -869,7 +907,9 @@ Go to a source directly only when:
   - the NETWORK CHECKS section reported its checks still IN PROGRESS and this
     turn needs their verdict (bin/fm-startup-network.sh report),
   - or a STARTUP TRUNCATED banner named the stage that would have printed it, in
-    which case that stage's sources were never emitted and must be reconciled.
+    which case that stage's sources were never emitted and must be reconciled,
+  - or a context re-emit opened with a read cue because the
+    harness cut the digest short.
 EOF
 
 # --- 6. fleet-state digest ---------------------------------------------
@@ -933,9 +973,16 @@ done
 subsection "AFK"
 # The away posture is the record (bin/fm-afk-contract.sh); the legacy flag
 # still marks a running daemon on the harnesses that launch one.
+# A quiet record (bin/fm-afk-contract.sh mode) is a present captain: it holds
+# nothing for a return.
 if [ -f "$STATE/.afk-contract" ]; then
-  printf 'present - away posture recorded at %s (hold-for-return only; bin/fm-afk-contract.sh readback for the mandate)' \
-    "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  if [ "$("$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = quiet ]; then
+    printf 'present - quiet mode recorded at %s (the captain is present and nothing is held for a return: requested actions proceed under ordinary attended authority; only an explicit /quiet off exits it)' \
+      "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  else
+    printf 'present - away posture recorded at %s (hold-for-return only; bin/fm-afk-contract.sh readback for the mandate)' \
+      "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  fi
   if [ -e "$STATE/.afk" ]; then
     if [ "$AFK_MODE" = quiet ]; then
       printf '; the quiet daemon owns the watcher.\n'
