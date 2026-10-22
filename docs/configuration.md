@@ -754,7 +754,9 @@ The flag is a home-local supervision-noise preference and is not inherited by se
 The tracked [`.no-mistakes.yaml`](../.no-mistakes.yaml) keeps test evidence private and runs the canonical [shell/workflow lint](../bin/fm-lint.sh) followed by the [Pi production-consumer typecheck](../tests/fm-pi-primary-types.test.sh) in the compiler-owning lint phase.
 `test.evidence.store_in_repo: false` keeps each run's test artifacts on local disk under the no-mistakes home instead of publishing them to an orphan `no-mistakes/evidence` branch, and `test.evidence.attach_media: false` keeps image and video artifacts from being uploaded to GitHub.
 no-mistakes reads both evidence fields from the pushed branch.
-It still embeds text evidence, artifact content, and the testing summary in the PR body with only home-directory paths redacted, so the Test instructions forbid private addresses, hostnames, account names, credentials, and the operator's configuration contents in evidence, and `pr.publish_intent: false` keeps the generated Intent section out of PR bodies; both of those are honored only from the default-branch copy.
+It still embeds text evidence, artifact content, and the testing summary in the PR body with only home-directory paths redacted, so the Test instructions forbid private addresses, hostnames, account names, credentials, and the operator's configuration contents in evidence.
+`pr.publish_intent: false` keeps the generated Intent section out of PR bodies.
+The Test instructions and `pr.publish_intent` are honored only from the default-branch copy, so they take effect once this file is on the default branch.
 
 Evidence never enters a pushed feature branch or the default branch; the worktree's `.no-mistakes/` stays local and CI rejects tracked entries under that path.
 The [`firstmate-coding-guidelines` skill](../.agents/skills/firstmate-coding-guidelines/SKILL.md#no-mistakes-test-configuration) owns why `commands.test` stays absent and targeted validation belongs to the evidence path.
